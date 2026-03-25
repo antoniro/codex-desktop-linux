@@ -1,6 +1,7 @@
 #!/bin/bash
 # install-deps.sh — Install system dependencies for Codex Desktop Linux
 # Supports: Debian/Ubuntu (apt), Fedora 41+ (dnf5), Fedora <41 (dnf), Arch (pacman)
+# Also installs the Rust toolchain (cargo) via rustup when not already present.
 set -Eeuo pipefail
 
 RED='\033[0;31m'
@@ -68,6 +69,34 @@ install_pacman() {
 }
 
 # ---------------------------------------------------------------------------
+# Rust / cargo (via rustup — distro-independent)
+# ---------------------------------------------------------------------------
+install_rust() {
+    # Already on PATH
+    if command -v cargo &>/dev/null; then
+        info "cargo already installed ($(cargo --version))"
+        return
+    fi
+
+    # Installed by rustup but not yet sourced in this session
+    if [ -x "$HOME/.cargo/bin/cargo" ]; then
+        info "cargo found at ~/.cargo/bin — sourcing environment"
+        # shellcheck source=/dev/null
+        source "$HOME/.cargo/env"
+        return
+    fi
+
+    info "Installing Rust toolchain via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+    # Make cargo available in this shell session
+    # shellcheck source=/dev/null
+    source "$HOME/.cargo/env"
+
+    info "Rust installed. Run 'source \$HOME/.cargo/env' or open a new terminal to use cargo."
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 DISTRO="$(detect_distro)"
@@ -87,4 +116,6 @@ case "$DISTRO" in
         ;;
 esac
 
-info "Dependencies installed. You can now run: ./install.sh"
+install_rust
+
+info "All dependencies installed. You can now run: ./install.sh"

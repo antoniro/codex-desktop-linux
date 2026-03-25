@@ -37,7 +37,10 @@ ensure_updater_binary() {
     fi
 
     [ -f "$REPO_DIR/Cargo.toml" ] || error "Missing updater binary: $UPDATER_BINARY_SOURCE"
-    command -v cargo >/dev/null 2>&1 || error "cargo is required to build codex-update-manager"
+    command -v cargo >/dev/null 2>&1 || error "cargo is required to build codex-update-manager.
+Install the Rust toolchain:
+  bash scripts/install-deps.sh        # auto-installs via rustup
+  # or manually: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 
     info "Building codex-update-manager release binary"
     cargo build --release -p codex-update-manager >&2
