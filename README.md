@@ -21,7 +21,7 @@ The installer:
 3. Rebuilds native Node.js modules for Linux
 4. Downloads a Linux Electron runtime
 5. Writes a Linux launcher into `codex-app/start.sh`
-6. Packages `codex-app/` as a Debian or RPM package
+6. Packages `codex-app/` as a Debian, RPM, or pacman package
 7. Starts `codex-update-manager` as a `systemd --user` service for local auto-updates
 
 ## Prerequisites
@@ -49,6 +49,24 @@ bash scripts/install-deps.sh
 ```
 
 That helper detects `apt`, `dnf5`, `dnf`, or `pacman`, installs the system dependencies, and bootstraps Rust through `rustup` if needed.
+
+### Arch Linux
+
+```bash
+bash scripts/install-deps.sh
+```
+
+Or manually:
+
+```bash
+sudo pacman -S --needed nodejs npm python p7zip curl unzip base-devel
+```
+
+You also need the **Rust toolchain** for the updater crate:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
 ### NixOS
 
@@ -110,7 +128,7 @@ echo 'alias codex-desktop="~/codex-desktop-linux/codex-app/start.sh"' >> ~/.bash
 
 ## Native Packages
 
-The repository can build either a Debian package or an RPM package from the generated `codex-app/` directory.
+The repository can build a Debian, RPM, or pacman package from the generated `codex-app/` directory.
 
 ### Debian
 
@@ -148,6 +166,24 @@ Install it with:
 sudo rpm -Uvh dist/codex-desktop-*.rpm
 ```
 
+### Arch Linux (pacman)
+
+```bash
+./scripts/build-pacman.sh
+```
+
+Output:
+
+```bash
+dist/codex-desktop-YYYY.MM.DD.HHMMSS-1-x86_64.pkg.tar.zst
+```
+
+Install it with:
+
+```bash
+sudo pacman -U dist/codex-desktop-*.pkg.tar.zst
+```
+
 ### Makefile shortcuts
 
 ```bash
@@ -157,13 +193,14 @@ make build-updater
 make build-app
 make deb
 make rpm
+make pacman
 make package
 make install
 make clean-dist
 make clean-state
 ```
 
-`make package` auto-detects the native package manager available on the host and builds the matching package type.
+`make package` auto-detects the native package manager available on the host and builds the matching package type (Debian, RPM, or pacman).
 
 ## Update Manager
 
@@ -237,7 +274,7 @@ The launcher also writes logs to:
 After changing installer, packaging, or updater logic, validate at least:
 
 ```bash
-bash -n install.sh scripts/build-deb.sh scripts/build-rpm.sh scripts/install-deps.sh
+bash -n install.sh scripts/build-deb.sh scripts/build-rpm.sh scripts/build-pacman.sh scripts/install-deps.sh
 cargo check -p codex-update-manager
 cargo test -p codex-update-manager
 ./scripts/build-deb.sh
@@ -249,6 +286,12 @@ If `rpmbuild` is available, also run:
 
 ```bash
 ./scripts/build-rpm.sh
+```
+
+If `makepkg` is available (Arch Linux), also run:
+
+```bash
+./scripts/build-pacman.sh
 ```
 
 If launcher behavior changed, inspect:

@@ -21,7 +21,10 @@ const REQUIRED_BUNDLE_FILES: [(&str, &str); 5] = [
     ("packaging/linux", "packaging/linux"),
     ("assets/codex.png", "assets/codex.png"),
 ];
-const OPTIONAL_BUNDLE_FILES: [(&str, &str); 1] = [("scripts/build-rpm.sh", "scripts/build-rpm.sh")];
+const OPTIONAL_BUNDLE_FILES: [(&str, &str); 2] = [
+    ("scripts/build-rpm.sh", "scripts/build-rpm.sh"),
+    ("scripts/build-pacman.sh", "scripts/build-pacman.sh"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Paths to the temporary workspace and generated package produced by a rebuild.
@@ -142,6 +145,7 @@ impl BuilderWorkspace {
 fn package_build_script(bundle_dir: &Path) -> PathBuf {
     match PackageKind::detect() {
         PackageKind::Rpm => bundle_dir.join("scripts/build-rpm.sh"),
+        PackageKind::Pacman => bundle_dir.join("scripts/build-pacman.sh"),
         PackageKind::Deb => bundle_dir.join("scripts/build-deb.sh"),
     }
 }
@@ -226,21 +230,35 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Find a native package file (.deb or .rpm) inside `dist_dir`.
 fn find_package_in(dist_dir: &Path) -> Result<PathBuf> {
     for entry in
         fs::read_dir(dist_dir).with_context(|| format!("Failed to read {}", dist_dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if ext == "deb" || ext == "rpm" {
-                return Ok(path);
-            }
+        if is_native_package_file(&path) {
+            return Ok(path);
         }
     }
 
-    anyhow::bail!("No .deb or .rpm package found in {}", dist_dir.display())
+    anyhow::bail!(
+        "No native package (.deb, .rpm, or .pkg.tar.zst) found in {}",
+        dist_dir.display()
+    )
+}
+
+fn is_native_package_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if name.ends_with(".pkg.tar.zst") || name.ends_with(".pkg.tar.xz") {
+        return true;
+    }
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("deb" | "rpm")
+    )
 }
 
 fn build_command_path() -> OsString {
@@ -328,19 +346,30 @@ mod tests {
     use anyhow::Result;
     use tempfile::tempdir;
 
-    fn write_fake_build_script(path: &Path, deb_output: bool) -> Result<()> {
-        let script_body = if deb_output {
-            r#"#!/bin/bash
+    enum FakePackageOutput {
+        Deb,
+        Rpm,
+        Pacman,
+    }
+
+    fn write_fake_build_script(path: &Path, output: FakePackageOutput) -> Result<()> {
+        let script_body = match output {
+            FakePackageOutput::Deb => r#"#!/bin/bash
 set -euo pipefail
 mkdir -p "${DIST_DIR_OVERRIDE}"
 touch "${DIST_DIR_OVERRIDE}/codex-desktop_${PACKAGE_VERSION}_amd64.deb"
-"#
-        } else {
-            r#"#!/bin/bash
+"#,
+            FakePackageOutput::Rpm => r#"#!/bin/bash
 set -euo pipefail
 mkdir -p "${DIST_DIR_OVERRIDE}"
 touch "${DIST_DIR_OVERRIDE}/codex-desktop-${PACKAGE_VERSION}.x86_64.rpm"
-"#
+"#,
+            FakePackageOutput::Pacman => r#"#!/bin/bash
+set -euo pipefail
+VER="${PACKAGE_VERSION%%+*}"
+mkdir -p "${DIST_DIR_OVERRIDE}"
+touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
+"#,
         };
 
         fs::write(path, script_body)?;
@@ -396,9 +425,9 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             )?;
         }
 
-        // Provide both build scripts so the test works on both Debian and Fedora.
-        write_fake_build_script(&bundle_root.join("scripts/build-deb.sh"), true)?;
-        write_fake_build_script(&bundle_root.join("scripts/build-rpm.sh"), false)?;
+        write_fake_build_script(&bundle_root.join("scripts/build-deb.sh"), FakePackageOutput::Deb)?;
+        write_fake_build_script(&bundle_root.join("scripts/build-rpm.sh"), FakePackageOutput::Rpm)?;
+        write_fake_build_script(&bundle_root.join("scripts/build-pacman.sh"), FakePackageOutput::Pacman)?;
         fs::write(
             bundle_root.join("scripts/lib/package-common.sh"),
             b"#!/bin/bash\n",
@@ -439,15 +468,10 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         assert_eq!(state.status, UpdateStatus::ReadyToInstall);
         assert!(artifacts.workspace_dir.exists());
         assert!(artifacts.package_path.exists());
-        // The file should be either a .deb or .rpm depending on the host distro.
-        let ext = artifacts
-            .package_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
         assert!(
-            ext == "deb" || ext == "rpm",
-            "expected .deb or .rpm, got .{ext}"
+            is_native_package_file(&artifacts.package_path),
+            "expected a native package (.deb, .rpm, or .pkg.tar.zst), got {}",
+            artifacts.package_path.display()
         );
         Ok(())
     }
@@ -490,7 +514,20 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         fs::write(temp.path().join("README.txt"), b"no packages here")?;
 
         let error = find_package_in(temp.path()).expect_err("package discovery should fail");
-        assert!(error.to_string().contains("No .deb or .rpm package found"));
+        assert!(error.to_string().contains("No native package"));
+        Ok(())
+    }
+
+    #[test]
+    fn finds_pacman_package_in_dist_dir() -> Result<()> {
+        let temp = tempdir()?;
+        let pkg_path = temp
+            .path()
+            .join("codex-desktop-2026.03.30.120000-1-x86_64.pkg.tar.zst");
+        fs::write(&pkg_path, b"pkg")?;
+
+        let found = find_package_in(temp.path())?;
+        assert_eq!(found, pkg_path);
         Ok(())
     }
 

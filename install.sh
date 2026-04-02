@@ -115,24 +115,19 @@ extract_dmg() {
     local dmg_path="$1"
     info "Extracting DMG with 7z..."
 
-    local seven_zip_status=0
-    if 7z x -y "$dmg_path" -o"$WORK_DIR/dmg-extract" >&2; then
-        seven_zip_status=0
-    else
-        seven_zip_status=$?
+    local seven_log="$WORK_DIR/7z.log"
+    if ! "$SEVEN_ZIP_CMD" x -y -snl "$dmg_path" -o"$WORK_DIR/dmg-extract" >"$seven_log" 2>&1; then
+        if grep -q "Dangerous link path was ignored" "$seven_log"; then
+            warn "7-zip reported a dangerous link inside the DMG. Continuing without it."
+        else
+            cat "$seven_log" >&2
+            error "Failed to extract DMG"
+        fi
     fi
 
     local app_dir
     app_dir=$(find "$WORK_DIR/dmg-extract" -maxdepth 3 -name "*.app" -type d | head -1)
-    if [ -z "$app_dir" ]; then
-        error "Failed to extract DMG"
-    fi
-
-    # 7z can return non-zero for non-fatal warnings, such as the DMG's
-    # /Applications symlink being skipped as a "dangerous link path".
-    if [ "$seven_zip_status" -ne 0 ]; then
-        warn "7z reported extraction warnings (exit code $seven_zip_status); continuing"
-    fi
+    [ -n "$app_dir" ] || error "Could not find .app bundle in DMG"
 
     info "Found: $(basename "$app_dir")"
     echo "$app_dir"
@@ -310,6 +305,7 @@ find_codex_cli() {
     for candidate in \
         "$HOME/.nvm/versions/node/current/bin/codex" \
         "$HOME/.nvm/versions/node"/*/bin/codex \
+        "$HOME/.local/share/pnpm/codex" \
         "$HOME/.local/bin/codex" \
         "/usr/local/bin/codex" \
         "/usr/bin/codex"

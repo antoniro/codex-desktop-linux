@@ -6,10 +6,11 @@ APP_DIR := $(CURDIR)/codex-app
 PACKAGE_NAME := codex-desktop
 DEB_GLOB := $(CURDIR)/dist/$(PACKAGE_NAME)_*.deb
 RPM_GLOB := $(CURDIR)/dist/$(PACKAGE_NAME)-*.rpm
+PACMAN_GLOB := $(CURDIR)/dist/$(PACKAGE_NAME)-[0-9]*.pkg.tar.*
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check test build-updater build-app deb rpm package install clean-dist clean-state
+.PHONY: help check test build-updater build-app deb rpm pacman package install clean-dist clean-state
 
 help:
 	@printf '\nCodex Desktop Linux Make Targets\n\n'
@@ -19,7 +20,8 @@ help:
 	@printf '  %-18s %s\n' "make build-app" "Run install.sh and regenerate codex-app/"
 	@printf '  %-18s %s\n' "make deb" "Build the Debian package into dist/"
 	@printf '  %-18s %s\n' "make rpm" "Build the RPM package into dist/ (Fedora)"
-	@printf '  %-18s %s\n' "make package" "Build native package (auto-detects deb or rpm)"
+	@printf '  %-18s %s\n' "make pacman" "Build the pacman package into dist/ (Arch)"
+	@printf '  %-18s %s\n' "make package" "Build native package (auto-detects deb, rpm, or pacman)"
 	@printf '  %-18s %s\n' "make install" "Install the latest generated native package"
 	@printf '  %-18s %s\n' "make clean-dist" "Remove generated dist/ artifacts"
 	@printf '  %-18s %s\n' "make clean-state" "Remove updater runtime state from XDG directories"
@@ -28,10 +30,12 @@ help:
 	@printf '  %-18s %s\n' "PACKAGE_VERSION=..." "Override the package version for make deb / make rpm"
 	@printf '  %-18s %s\n' "DEB=/path/file.deb" "Override the .deb used by make install"
 	@printf '  %-18s %s\n' "RPM=/path/file.rpm" "Override the .rpm used by make install"
+	@printf '  %-18s %s\n' "PKG=/path/file.pkg.tar.zst" "Override the pacman package used by make install"
 	@printf '\nExamples:\n\n'
 	@printf '  %s\n' "make build-app DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make deb PACKAGE_VERSION=2026.03.24.220723+88f07cd3"
 	@printf '  %s\n' "make rpm PACKAGE_VERSION=2026.03.24.220723+88f07cd3"
+	@printf '  %s\n' "make pacman PACKAGE_VERSION=2026.03.24.220723+88f07cd3"
 	@printf '  %s\n\n' "make install"
 
 check:
@@ -58,20 +62,33 @@ rpm: build-updater
 	@echo "[make] Building RPM package"
 	PACKAGE_VERSION="$(or $(PACKAGE_VERSION),)" ./scripts/build-rpm.sh
 
+pacman: build-updater
+	@echo "[make] Building pacman package"
+	PACKAGE_VERSION="$(or $(PACKAGE_VERSION),)" ./scripts/build-pacman.sh
+
 package: build-updater
 	@echo "[make] Building native package (auto-detecting distro)"
-	@if command -v dpkg-deb >/dev/null 2>&1; then \
+	@if command -v makepkg >/dev/null 2>&1 && ! command -v dpkg-deb >/dev/null 2>&1; then \
+		PACKAGE_VERSION="$(or $(PACKAGE_VERSION),)" ./scripts/build-pacman.sh; \
+	elif command -v dpkg-deb >/dev/null 2>&1; then \
 		PACKAGE_VERSION="$(or $(PACKAGE_VERSION),)" ./scripts/build-deb.sh; \
 	elif command -v rpmbuild >/dev/null 2>&1; then \
 		PACKAGE_VERSION="$(or $(PACKAGE_VERSION),)" ./scripts/build-rpm.sh; \
 	else \
-		echo "[make] Neither dpkg-deb nor rpmbuild found. Install dpkg-dev (Debian) or rpm-build (Fedora)." >&2; \
+		echo "[make] No supported packaging tool found. Install dpkg-dev (Debian), rpm-build (Fedora), or pacman (Arch)." >&2; \
 		exit 1; \
 	fi
 
 install:
 	@echo "[make] Installing latest native package"
-	@if command -v dpkg >/dev/null 2>&1; then \
+	@if command -v pacman >/dev/null 2>&1 && ! command -v dpkg >/dev/null 2>&1; then \
+		pkg="$${PKG:-$$(ls -1 $(PACMAN_GLOB) 2>/dev/null | sort -V | tail -n 1)}"; \
+		if [ -z "$$pkg" ]; then \
+			echo "[make] No pacman package found. Run 'make pacman' first." >&2; exit 1; \
+		fi; \
+		echo "[make] Installing $$pkg"; \
+		sudo pacman -U --noconfirm "$$pkg"; \
+	elif command -v dpkg >/dev/null 2>&1; then \
 		deb="$${DEB:-$$(ls -1 $(DEB_GLOB) 2>/dev/null | sort -V | tail -n 1)}"; \
 		if [ -z "$$deb" ]; then \
 			echo "[make] No Debian package found. Run 'make deb' first." >&2; exit 1; \
@@ -86,7 +103,7 @@ install:
 		echo "[make] Installing $$rpm"; \
 		sudo rpm -Uvh "$$rpm"; \
 	else \
-		echo "[make] No supported package manager found (dpkg or rpm)." >&2; exit 1; \
+		echo "[make] No supported package manager found (dpkg, rpm, or pacman)." >&2; exit 1; \
 	fi
 
 clean-dist:

@@ -14,32 +14,43 @@ const DPKG_CANDIDATES: &[&str] = &["/usr/bin/dpkg", "/bin/dpkg"];
 const DPKG_DEB_CANDIDATES: &[&str] = &["/usr/bin/dpkg-deb", "/bin/dpkg-deb"];
 const DPKG_QUERY_CANDIDATES: &[&str] = &["/usr/bin/dpkg-query", "/bin/dpkg-query"];
 const RPM_CANDIDATES: &[&str] = &["/usr/bin/rpm", "/bin/rpm"];
+const PACMAN_CANDIDATES: &[&str] = &["/usr/bin/pacman", "/bin/pacman"];
 
 /// The native package format in use on the current system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageKind {
     Deb,
     Rpm,
+    Pacman,
 }
 
 impl PackageKind {
-    /// Detect the package manager available on the running system.
-    /// Falls back to [`PackageKind::Deb`] when neither `dpkg` nor `rpm` is found.
     pub fn detect() -> Self {
-        if program_exists(DPKG_CANDIDATES, "dpkg") {
+        if program_exists(PACMAN_CANDIDATES, "pacman")
+            && !program_exists(DPKG_CANDIDATES, "dpkg")
+            && !program_exists(RPM_CANDIDATES, "rpm")
+        {
+            Self::Pacman
+        } else if program_exists(DPKG_CANDIDATES, "dpkg") {
             Self::Deb
         } else if program_exists(RPM_CANDIDATES, "rpm") {
             Self::Rpm
+        } else if program_exists(PACMAN_CANDIDATES, "pacman") {
+            Self::Pacman
         } else {
             Self::Deb
         }
     }
 
-    /// Infer the package kind from a file path extension.
     pub fn from_path(path: &Path) -> Self {
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("rpm") => Self::Rpm,
-            _ => Self::Deb,
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.ends_with(".pkg.tar.zst") || name.ends_with(".pkg.tar.xz") {
+            Self::Pacman
+        } else {
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("rpm") => Self::Rpm,
+                _ => Self::Deb,
+            }
         }
     }
 }
@@ -49,6 +60,7 @@ pub fn installed_package_version() -> String {
     match PackageKind::detect() {
         PackageKind::Deb => installed_deb_version(),
         PackageKind::Rpm => installed_rpm_version(),
+        PackageKind::Pacman => installed_pacman_version(),
     }
 }
 
@@ -69,6 +81,22 @@ fn installed_rpm_version() -> String {
         &program_path(RPM_CANDIDATES, "rpm"),
         &["-q", "--queryformat", "%{VERSION}-%{RELEASE}", PACKAGE_NAME],
     )
+}
+
+fn installed_pacman_version() -> String {
+    let output = match Command::new(program_path(PACMAN_CANDIDATES, "pacman"))
+        .args(["-Q", PACKAGE_NAME])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return "unknown".to_string(),
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 /// Installs a rebuilt Debian package on the local machine.
@@ -104,12 +132,25 @@ pub fn install_rpm(path: &Path) -> Result<()> {
     run_install(&mut command).context("rpm -Uvh failed")
 }
 
+/// Installs a rebuilt pacman package on the local machine.
+pub fn install_pacman(path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        path.exists(),
+        "Pacman package not found: {}",
+        path.display()
+    );
+
+    let mut command = pacman_install_command(path);
+    run_install(&mut command).context("pacman -U failed")
+}
+
 /// Builds the `pkexec` command used for privileged package installation.
 pub fn pkexec_command(current_exe: &Path, package_path: &Path) -> Command {
     let updater_binary = updater_binary_for_privileged_install(current_exe);
     let subcommand = match PackageKind::from_path(package_path) {
         PackageKind::Rpm => "install-rpm",
         PackageKind::Deb => "install-deb",
+        PackageKind::Pacman => "install-pacman",
     };
     let mut command = Command::new("pkexec");
     command
@@ -201,6 +242,12 @@ fn install_command_in_parent(program: &Path, path: &Path) -> Result<Command> {
 fn rpm_install_command(path: &Path) -> Command {
     let mut command = Command::new(program_path(RPM_CANDIDATES, "rpm"));
     command.args(["-Uvh"]).arg(path.as_os_str());
+    command
+}
+
+fn pacman_install_command(path: &Path) -> Command {
+    let mut command = Command::new(program_path(PACMAN_CANDIDATES, "pacman"));
+    command.args(["-U", "--noconfirm"]).arg(path.as_os_str());
     command
 }
 
@@ -371,6 +418,47 @@ mod tests {
         assert_eq!(
             PackageKind::from_path(Path::new("/tmp/codex.deb")),
             PackageKind::Deb
+        );
+    }
+
+    #[test]
+    fn package_kind_from_path_detects_pacman_zst() {
+        assert_eq!(
+            PackageKind::from_path(Path::new(
+                "/tmp/codex-desktop-2026.03.30-1-x86_64.pkg.tar.zst"
+            )),
+            PackageKind::Pacman
+        );
+    }
+
+    #[test]
+    fn package_kind_from_path_detects_pacman_xz() {
+        assert_eq!(
+            PackageKind::from_path(Path::new(
+                "/tmp/codex-desktop-2026.03.30-1-x86_64.pkg.tar.xz"
+            )),
+            PackageKind::Pacman
+        );
+    }
+
+    #[test]
+    fn builds_pkexec_command_for_privileged_pacman_install() {
+        let command = pkexec_command(
+            Path::new("/usr/bin/codex-update-manager"),
+            Path::new("/tmp/update.pkg.tar.zst"),
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "/usr/bin/codex-update-manager",
+                "install-pacman",
+                "--path",
+                "/tmp/update.pkg.tar.zst"
+            ]
         );
     }
 
