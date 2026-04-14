@@ -10,10 +10,19 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        sourceRoot = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            pkgs.lib.cleanSourceFilter path type
+            && (let
+              pathStr = toString path;
+            in
+              !(pkgs.lib.hasSuffix "/.codex" pathStr || pkgs.lib.hasInfix "/.codex/" pathStr));
+        };
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-r+2Kjrem1ovzBYUV/7Qyv/ieeYWAb7lAvDzTJp/Gzug=";
+          hash = "sha256-uSOeP7IozPh54EKyPyRwQ1xTwfL8lIStWS27ibg7ir8=";
         };
 
         electronLibs = with pkgs; [
@@ -71,18 +80,21 @@
 
             root_dir="$(pwd)"
             workdir="$(mktemp -d)"
+            source_dir="$workdir/source"
             cleanup() {
               rm -rf "$workdir"
             }
             trap cleanup EXIT
 
-            cp ${./install.sh} "$workdir/install.sh"
-            cp ${codexDmg} "$workdir/Codex.dmg"
-            chmod +x "$workdir/install.sh"
+            mkdir -p "$source_dir"
+            cp -R ${sourceRoot}/. "$source_dir"
+            chmod -R u+w "$source_dir"
+            cp ${codexDmg} "$source_dir/Codex.dmg"
+            chmod +x "$source_dir/install.sh"
 
-            cd "$workdir"
+            cd "$source_dir"
             export CODEX_INSTALL_DIR="''${CODEX_INSTALL_DIR:-$root_dir/codex-app}"
-            ${pkgs.bash}/bin/bash "$workdir/install.sh" "$workdir/Codex.dmg" "$@"
+            ${pkgs.bash}/bin/bash "$source_dir/install.sh" "$source_dir/Codex.dmg" "$@"
 
             install_dir="''${CODEX_INSTALL_DIR:-$root_dir/codex-app}"
 
