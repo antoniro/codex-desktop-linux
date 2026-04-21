@@ -1,7 +1,6 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-DEFAULT_DMG := $(CURDIR)/Codex.dmg
 APP_DIR := $(CURDIR)/codex-app
 PACKAGE_NAME := codex-desktop
 DEB_GLOB := $(CURDIR)/dist/$(PACKAGE_NAME)_*.deb
@@ -10,12 +9,15 @@ PACMAN_GLOB := $(CURDIR)/dist/$(PACKAGE_NAME)-[0-9]*.pkg.tar.*
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check test build-updater build-app run-app deb rpm pacman package install service-enable service-status clean-dist clean-state
+.PHONY: help install-deps native-install native-upgrade check test build-updater build-app run-app deb rpm pacman package install service-enable service-status clean-dist clean-state
 
 help:
 	@printf '\nCodex Desktop Linux Make Targets\n\n'
 	@printf '  %-18s %s\n' "make check" "Run cargo check for codex-update-manager"
 	@printf '  %-18s %s\n' "make test" "Run updater test suite"
+	@printf '  %-18s %s\n' "make install-deps" "Install host dependencies for this distro"
+	@printf '  %-18s %s\n' "make native-install" "Build and install the native package for this distro"
+	@printf '  %-18s %s\n' "make native-upgrade" "Rebuild and reinstall the native package"
 	@printf '  %-18s %s\n' "make build-updater" "Build codex-update-manager in release mode"
 	@printf '  %-18s %s\n' "make build-app" "Run install.sh and regenerate codex-app/"
 	@printf '  %-18s %s\n' "make run-app" "Launch the local generated Electron app from codex-app/"
@@ -29,12 +31,14 @@ help:
 	@printf '  %-18s %s\n' "make clean-dist" "Remove generated dist/ artifacts"
 	@printf '  %-18s %s\n' "make clean-state" "Remove updater runtime state from XDG directories"
 	@printf '\nVariables:\n\n'
-	@printf '  %-18s %s\n' "DMG=/path/file.dmg" "Override the DMG passed to install.sh (default: $(DEFAULT_DMG))"
+	@printf '  %-18s %s\n' "DMG=/path/file.dmg" "Optional DMG path passed to install.sh"
 	@printf '  %-18s %s\n' "PACKAGE_VERSION=..." "Override the package version for make deb / make rpm / make pacman"
 	@printf '  %-18s %s\n' "DEB=/path/file.deb" "Override the .deb used by make install"
 	@printf '  %-18s %s\n' "RPM=/path/file.rpm" "Override the .rpm used by make install"
 	@printf '  %-18s %s\n' "PKG=/path/file.pkg.tar.zst" "Override the pacman package used by make install"
 	@printf '\nExamples:\n\n'
+	@printf '  %s\n' "bash scripts/install-native.sh"
+	@printf '  %s\n' "make native-install"
 	@printf '  %s\n' "make build-app DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make run-app"
 	@printf '  %s\n' "make deb PACKAGE_VERSION=2026.03.24.220723+88f07cd3"
@@ -42,6 +46,20 @@ help:
 	@printf '  %s\n' "make pacman PACKAGE_VERSION=2026.03.24.220723+88f07cd3"
 	@printf '  %s\n' "make install"
 	@printf '  %s\n\n' "make service-enable"
+
+install-deps:
+	@echo "[make] Installing host dependencies"
+	./scripts/install-deps.sh
+
+native-install:
+	@echo "[make] Building and installing native package"
+	@if [ -n "$(strip $(DMG))" ]; then \
+		./scripts/install-native.sh "$(DMG)"; \
+	else \
+		./scripts/install-native.sh; \
+	fi
+
+native-upgrade: native-install
 
 check:
 	@echo "[make] Running cargo check"
@@ -57,7 +75,11 @@ build-updater:
 
 build-app:
 	@echo "[make] Regenerating codex-app from DMG"
-	./install.sh "$(or $(DMG),$(DEFAULT_DMG))"
+	@if [ -n "$(strip $(DMG))" ]; then \
+		./install.sh "$(DMG)"; \
+	else \
+		./install.sh; \
+	fi
 
 run-app:
 	@echo "[make] Launching local Electron app"
@@ -110,7 +132,13 @@ install:
 			echo "[make] No RPM package found. Run 'make rpm' first." >&2; exit 1; \
 		fi; \
 		echo "[make] Installing $$rpm"; \
-		sudo rpm -Uvh "$$rpm"; \
+		if command -v dnf5 >/dev/null 2>&1; then \
+			sudo dnf5 install -y "$$rpm"; \
+		elif command -v dnf >/dev/null 2>&1; then \
+			sudo dnf install -y "$$rpm"; \
+		else \
+			sudo rpm -Uvh "$$rpm"; \
+		fi; \
 	else \
 		echo "[make] No supported package manager found (dpkg, rpm, or pacman)." >&2; exit 1; \
 	fi

@@ -137,27 +137,33 @@ wait up to a day for the bot to publish the updated hash, then retry. If it stil
 
 ## Quick Start
 
-Clone the repo, generate the local app, and run it:
+Clone the repo and install a native package for your distro:
 
 ```bash
 git clone https://github.com/ilysenko/codex-desktop-linux.git
 cd codex-desktop-linux
-bash scripts/install-deps.sh
-npm i -g @openai/codex
-make build-app
-make run-app
+bash scripts/install-native.sh
 ```
 
-If `npm i -g` needs elevated privileges on your system, replace it with:
+That script:
+
+- installs the required host dependencies for the detected distro
+- installs the Codex CLI, falling back to `~/.local` if a global npm install fails
+- downloads or reuses `Codex.dmg`
+- generates `codex-app/`
+- builds the native package for the current distro
+- installs it and enables `codex-update-manager.service` for the current user
+
+After that, launch the installed app from your desktop launcher or by running:
 
 ```bash
-npm i -g --prefix ~/.local @openai/codex
+codex-desktop
 ```
 
 ### Use your own DMG
 
 ```bash
-make build-app DMG=/path/to/Codex.dmg
+bash scripts/install-native.sh /path/to/Codex.dmg
 ```
 
 ## Usage
@@ -169,6 +175,9 @@ This creates `codex-app/` from the upstream DMG and writes the Linux launcher to
 ```bash
 make build-app
 ```
+
+`make build-app` now lets `install.sh` download `Codex.dmg` automatically unless you
+pass `DMG=/path/to/Codex.dmg`.
 
 Run the generated app directly from the repo:
 
@@ -190,6 +199,12 @@ Build the package that matches the current distro automatically:
 make package
 ```
 
+If you want the full build-and-install flow in one command after cloning the repo:
+
+```bash
+bash scripts/install-native.sh
+```
+
 Or choose the format explicitly:
 
 ```bash
@@ -208,7 +223,7 @@ echo 'alias codex-desktop="~/codex-desktop-linux/codex-app/start.sh"' >> ~/.bash
 
 The repository can build a Debian, RPM, or pacman package from the generated `codex-app/` directory.
 
-**Prerequisite:** Run `make build-app` (or `./install.sh`) first to produce `codex-app/`. The packaging scripts only repackage what is already there — they do not download or extract the DMG themselves.
+**Prerequisite:** Run `make build-app` (or `./install.sh`) first to produce `codex-app/`. The packaging scripts only repackage what is already there — they do not download or extract the DMG themselves. If you want one command that handles the DMG download, app generation, package build, and package install for you, run `bash scripts/install-native.sh` instead.
 
 ### Debian
 
@@ -250,6 +265,12 @@ Output:
 dist/codex-desktop-YYYY.MM.DD.HHMMSS-<release>.x86_64.rpm
 ```
 
+Install it with:
+
+```bash
+sudo dnf install ./dist/codex-desktop-*.rpm
+```
+
 ### Arch Linux (pacman)
 
 Requires `codex-app/` to exist (run `make build-app` first).
@@ -274,6 +295,14 @@ sudo pacman -U dist/codex-desktop-*.pkg.tar.zst
 
 ```bash
 make install
+```
+
+### One-command native install or manual rebuild
+
+```bash
+bash scripts/install-native.sh
+make native-install
+make native-upgrade
 ```
 
 ### Start or inspect the updater service
@@ -304,6 +333,9 @@ Notes:
 
 ```bash
 make help
+make install-deps
+make native-install
+make native-upgrade
 make check
 make test
 make build-updater
@@ -320,7 +352,7 @@ make clean-dist
 make clean-state
 ```
 
-`make package` auto-detects the native package manager available on the host and builds the matching package type (Debian, RPM, or pacman). `make install` does the same for the latest built native package.
+`make package` auto-detects the native package manager available on the host and builds the matching package type (Debian, RPM, or pacman). `make install` does the same for the latest built native package. `make native-install` wraps the full dependency-install, app-build, package-build, and package-install flow.
 ## How It Works
 
 The build and update flow is:

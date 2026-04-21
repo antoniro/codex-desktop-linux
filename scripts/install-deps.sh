@@ -45,11 +45,11 @@ install_apt() {
 
 install_dnf5() {
     info "Detected Fedora 41+ (dnf5)"
-    # dnf5: 7zip provides /usr/bin/7z; @development-tools is the group syntax
-    sudo dnf install -y \
+    # dnf5: 7zip provides /usr/bin/7z
+    sudo dnf5 install -y \
         nodejs npm python3 \
         7zip curl unzip \
-        @development-tools
+        make gcc-c++ rpm-build
 }
 
 install_dnf() {
@@ -57,8 +57,8 @@ install_dnf() {
     # Older dnf: 7z comes from p7zip + p7zip-plugins
     sudo dnf install -y \
         nodejs npm python3 \
-        p7zip p7zip-plugins curl unzip
-    sudo dnf groupinstall -y 'Development Tools'
+        p7zip p7zip-plugins curl unzip \
+        make gcc-c++ rpm-build
 }
 
 install_pacman() {
@@ -172,6 +172,31 @@ install_rust() {
     info "Rust installed. Run 'source \$HOME/.cargo/env' or open a new terminal to use cargo."
 }
 
+verify_dependencies() {
+    local missing=()
+    local cmd
+
+    for cmd in node npm npx python3 curl unzip make g++; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+
+    if ! command -v 7z &>/dev/null && ! command -v 7zz &>/dev/null; then
+        missing+=("7z-or-7zz")
+    fi
+
+    command -v cargo &>/dev/null || missing+=("cargo")
+
+    case "$DISTRO" in
+        dnf5|dnf)
+            command -v rpmbuild &>/dev/null || missing+=("rpmbuild")
+            ;;
+    esac
+
+    if [ ${#missing[@]} -ne 0 ]; then
+        error "Dependency install completed, but these commands are still missing: ${missing[*]}"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -194,5 +219,6 @@ esac
 
 install_rust
 bootstrap_7zz
+verify_dependencies
 
 info "All dependencies installed. You can now run: ./install.sh"
