@@ -5,6 +5,14 @@ Summary:        Codex Desktop for Linux
 License:        Proprietary
 ExclusiveArch:  __ARCH__
 
+# The managed Node.js runtime is bundled under /opt, including npm/corepack
+# helper shims for multiple platforms. Fedora's brp-mangle-shebangs would
+# rewrite those private shims to system interpreters such as /usr/bin/node and
+# /usr/bin/pwsh, then RPM would add false system dependencies. Leave the
+# bundled runtime untouched and exclude it from automatic dependency scanning.
+%global __brp_mangle_shebangs_exclude_from ^/opt/__PACKAGE_NAME__/(resources|update-builder)/node-runtime/.*
+%global __requires_exclude_from ^/opt/__PACKAGE_NAME__/(resources|update-builder)/node-runtime/.*
+
 Requires:       python3, p7zip, polkit, curl, unzip, gcc-c++, make
 Requires:       alsa-lib, at-spi2-atk, atk, glib2, gtk3, libdrm
 Requires:       nspr, nss, pango, libstdc++, libX11, libxcb
