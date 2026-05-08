@@ -106,44 +106,63 @@ run_nix_build() {
     return "$status"
 }
 
-mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
-curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
+main() {
+    mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
+    curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
 
-new_dmg_hash="$(nix hash file --sri --type sha256 "$UPSTREAM_DMG_PATH")"
-if ! validate_sri_hash "$new_dmg_hash"; then
-    echo "Refusing to proceed: computed DMG hash '$new_dmg_hash' is not a valid SRI sha256." >&2
-    exit 1
-fi
+    new_dmg_hash="$(nix hash file --sri --type sha256 "$UPSTREAM_DMG_PATH")"
+    if ! validate_sri_hash "$new_dmg_hash"; then
+        echo "Refusing to proceed: computed DMG hash '$new_dmg_hash' is not a valid SRI sha256." >&2
+        exit 1
+    fi
 
-current_dmg_hash="$(read_flake_hash "codexDmg = pkgs.fetchurl {" "hash = ")"
-echo "Current Codex.dmg hash:  $current_dmg_hash"
-echo "Upstream Codex.dmg hash: $new_dmg_hash"
-replace_flake_hash "codexDmg = pkgs.fetchurl {" "hash = " "$new_dmg_hash"
+    current_dmg_hash="$(read_flake_hash "codexDmg = pkgs.fetchurl {" "hash = ")"
+    echo "Current Codex.dmg hash:  $current_dmg_hash"
+    echo "Upstream Codex.dmg hash: $new_dmg_hash"
+    replace_flake_hash "codexDmg = pkgs.fetchurl {" "hash = " "$new_dmg_hash"
 
-# Seed the Nix store so the build can reuse the DMG that was already downloaded
-# for hashing instead of fetching the same 300MB artifact again.
-nix-store --add-fixed sha256 "$UPSTREAM_DMG_PATH" >/dev/null
+    # Seed the Nix store so the build can reuse the DMG that was already downloaded
+    # for hashing instead of fetching the same 300MB artifact again.
+    nix-store --add-fixed sha256 "$UPSTREAM_DMG_PATH" >/dev/null
 
-if run_nix_build "$BUILD_LOG"; then
-    echo "Nix build succeeded with the current payload outputHash."
-    exit 0
-fi
+    if run_nix_build "$BUILD_LOG"; then
+        echo "Nix build succeeded with the current payload outputHash."
+        exit 0
+    fi
 
-new_payload_hash="$(extract_got_sri_hash "$BUILD_LOG" || true)"
-if [ -z "$new_payload_hash" ]; then
-    echo "Nix build failed without a fixed-output hash mismatch; leaving log at $BUILD_LOG" >&2
-    exit 1
-fi
+    new_payload_hash="$(extract_got_sri_hash "$BUILD_LOG" || true)"
+    if [ -z "$new_payload_hash" ]; then
+        echo "Nix build failed without a fixed-output hash mismatch; leaving log at $BUILD_LOG" >&2
+        exit 1
+    fi
 
-if ! validate_sri_hash "$new_payload_hash"; then
-    echo "Refusing to proceed: extracted payload hash '$new_payload_hash' is not a valid SRI sha256." >&2
-    exit 1
-fi
+    if ! validate_sri_hash "$new_payload_hash"; then
+        echo "Refusing to proceed: extracted payload hash '$new_payload_hash' is not a valid SRI sha256." >&2
+        exit 1
+    fi
 
-current_payload_hash="$(read_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = ")"
-echo "Current payload outputHash: $current_payload_hash"
-echo "Actual payload outputHash:  $new_payload_hash"
-replace_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = " "$new_payload_hash"
+    current_payload_hash="$(read_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = ")"
+    echo "Current payload outputHash: $current_payload_hash"
+    echo "Actual payload outputHash:  $new_payload_hash"
+    replace_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = " "$new_payload_hash"
 
-run_nix_build "$VERIFY_LOG"
-echo "Nix build succeeded after refreshing the payload outputHash."
+    run_nix_build "$VERIFY_LOG"
+    echo "Nix build succeeded after refreshing the payload outputHash."
+}
+
+case "${1:-}" in
+    read-flake-hash)
+        if [ "$#" -ne 3 ]; then
+            echo "usage: $0 read-flake-hash <anchor> <key>" >&2
+            exit 2
+        fi
+        read_flake_hash "$2" "$3"
+        ;;
+    "")
+        main
+        ;;
+    *)
+        echo "unknown command: $1" >&2
+        exit 2
+        ;;
+esac
