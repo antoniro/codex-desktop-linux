@@ -21,7 +21,7 @@ Run the helper to install them automatically:
 Or install manually:
   sudo apt install python3 p7zip-full curl unzip build-essential                   # Debian/Ubuntu
   sudo dnf install python3 7zip curl unzip @development-tools                       # Fedora 41+ (dnf5)
-  sudo dnf install python3 p7zip p7zip-plugins curl unzip                           # Fedora <41 (dnf)
+  sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip                # Fedora <41 (dnf)
     && sudo dnf groupinstall 'Development Tools'
   sudo pacman -S python p7zip curl unzip zstd base-devel                            # Arch
   sudo zypper install python3 p7zip-full curl unzip                                 # openSUSE
@@ -168,7 +168,9 @@ $(dependency_help)"
         SEVEN_ZIP_CMD="7z"
     fi
 
-    if "$SEVEN_ZIP_CMD" 2>&1 | grep -m 1 "7-Zip" | grep -q "16.02"; then
+    local seven_zip_banner
+    seven_zip_banner="$("$SEVEN_ZIP_CMD" 2>&1 | grep -m 1 "7-Zip" || true)"
+    if [[ "$seven_zip_banner" == *"16.02"* ]]; then
         error "System 7-zip is too old for modern APFS DMGs.
 Install a newer 7zz first by running:
   bash scripts/install-deps.sh
