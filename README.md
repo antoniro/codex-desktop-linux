@@ -64,13 +64,12 @@ The fastest path: install deps, build the local app, build the native package, i
 ```bash
 git clone https://github.com/ilysenko/codex-desktop-linux.git
 cd codex-desktop-linux
-bash scripts/install-deps.sh
-make build-app
-make package        # auto-detects deb / rpm / pacman
-make install        # installs the newest package from dist/
+make bootstrap-native
 ```
 
-`make package` picks the format that matches your distro. `make install` then runs the right `dpkg -i` / `dnf install` / `zypper install` / `pacman -U` against the freshly built artifact.
+`make bootstrap-native` installs build dependencies, regenerates `codex-app/` from a fresh upstream `Codex.dmg`, builds the matching native package, and installs the newest artifact from `dist/`. It uses the same package auto-detection as `make package` / `make install`.
+
+If dependencies are already installed, use `make install-native` to run only the fresh app build, package, and install steps.
 
 ### AppImage local self-build
 
@@ -245,11 +244,10 @@ That package omits `codex-update-manager`, the user service unit, updater polkit
 Manual updates should come from a checkout you have chosen to trust:
 
 ```bash
-git pull --ff-only
-make build-app-fresh
-PACKAGE_WITH_UPDATER=0 make package
-make install
+PACKAGE_WITH_UPDATER=0 make update-native
 ```
+
+`make update-native` runs `git pull --ff-only`, regenerates `codex-app/` from a fresh upstream `Codex.dmg`, builds the native package, and installs it. Keep `PACKAGE_WITH_UPDATER=0` when you want the installed package to stay in manual-update mode.
 
 ## Build from source / custom DMG
 
@@ -372,6 +370,9 @@ make test
 make build-updater
 make build-app
 make build-app-fresh
+make bootstrap-native
+make install-native
+make update-native
 make run-app
 make build-dev-app
 make run-dev-app

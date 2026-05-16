@@ -674,6 +674,27 @@ SCRIPT
     [ -z "$third_line" ] || fail "Expected make build-app-fresh default DMG argument to be empty, got: $(cat "$install_log")"
 }
 
+test_native_shortcut_targets_compose_existing_flows() {
+    info "Checking native install/update shortcut targets"
+    local install_log="$TMP_DIR/make-install-native.log"
+    local bootstrap_log="$TMP_DIR/make-bootstrap-native.log"
+    local update_log="$TMP_DIR/make-update-native.log"
+
+    make -n -C "$REPO_DIR" install-native >"$install_log"
+    assert_contains "$install_log" './install.sh --fresh'
+    assert_contains "$install_log" 'Building native package'
+    assert_contains "$install_log" 'Installing latest native package'
+
+    make -n -C "$REPO_DIR" bootstrap-native >"$bootstrap_log"
+    assert_contains "$bootstrap_log" 'bash scripts/install-deps.sh'
+    assert_contains "$bootstrap_log" 'PATH="$HOME/.cargo/bin:$PATH"'
+    assert_contains "$bootstrap_log" 'install-native'
+
+    make -n -C "$REPO_DIR" update-native >"$update_log"
+    assert_contains "$update_log" 'git pull --ff-only'
+    assert_contains "$update_log" 'install-native'
+}
+
 test_upstream_build_app_workflow_tracks_dmg_metadata() {
     info "Checking upstream build-app workflow metadata and cache behavior"
     local workflow="$REPO_DIR/.github/workflows/upstream-build-app.yml"
@@ -2781,6 +2802,7 @@ main() {
     test_make_install_reports_missing_native_packages
     test_make_build_app_uses_installer_download_flow_by_default
     test_make_build_app_fresh_uses_installer_fresh_flow
+    test_native_shortcut_targets_compose_existing_flows
     test_upstream_build_app_workflow_tracks_dmg_metadata
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
