@@ -11,8 +11,38 @@ const {
   applyMainBundlePatch,
   applyWrapperUpdateSettingsPatch,
 } = require("./patch.js");
+const {
+  enabledLinuxFeatureIds,
+  loadLinuxFeaturePatchDescriptors,
+  stageEnabledLinuxFeatureInstall,
+} = require("../../scripts/lib/linux-features.js");
 
 const featureDir = __dirname;
+const featuresRoot = path.resolve(featureDir, "..");
+
+function withTempFeatureConfig(enabled, fn) {
+  const originalConfig = process.env.CODEX_LINUX_FEATURES_CONFIG;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wrapper-updater-config-"));
+  process.env.CODEX_LINUX_FEATURES_CONFIG = path.join(tempDir, "features.json");
+  try {
+    fs.writeFileSync(process.env.CODEX_LINUX_FEATURES_CONFIG, JSON.stringify({ enabled }, null, 2));
+    return fn();
+  } finally {
+    if (originalConfig == null) {
+      delete process.env.CODEX_LINUX_FEATURES_CONFIG;
+    } else {
+      process.env.CODEX_LINUX_FEATURES_CONFIG = originalConfig;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function fakeManager(temp, body = "exit ${CODEX_FAKE_MANAGER_STATUS:-0}\n") {
+  const manager = path.join(temp, "codex-update-manager");
+  fs.writeFileSync(manager, `#!/usr/bin/env bash\n${body}`);
+  fs.chmodSync(manager, 0o755);
+  return manager;
+}
 
 test("main bundle patch writes app-state wrapper marker", () => {
   const source =
@@ -39,15 +69,59 @@ test("settings patch adds wrapper update toggle", () => {
   assert.equal(applyWrapperUpdateSettingsPatch(patched), patched);
 });
 
+test("feature exposes optional patches and declarative apply hooks when enabled", () => {
+  withTempFeatureConfig(["codex-wrapper-updater"], () => {
+    assert.deepEqual(enabledLinuxFeatureIds({ featuresRoot }), ["codex-wrapper-updater"]);
+    assert.deepEqual(
+      loadLinuxFeaturePatchDescriptors({ featuresRoot })
+        .filter((descriptor) => descriptor.id.startsWith("feature:codex-wrapper-updater:"))
+        .map((descriptor) => [descriptor.id, descriptor.phase, descriptor.ciPolicy]),
+      [
+        ["feature:codex-wrapper-updater:main-handler", "main-bundle", "optional"],
+        ["feature:codex-wrapper-updater:webview-runtime", "webview-asset", "optional"],
+        ["feature:codex-wrapper-updater:settings-toggle", "extracted-app", "optional"],
+      ],
+    );
+
+    const appDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wrapper-updater-app-"));
+    try {
+      const plan = stageEnabledLinuxFeatureInstall(appDir, { featuresRoot });
+      assert.deepEqual(
+        plan.runtimeHooks.map((hook) => [hook.key, hook.target, hook.mode.toString(8)]),
+        [
+          ["prelaunch", ".codex-linux/prelaunch.d/codex-wrapper-updater-apply-pending.sh", "755"],
+          ["afterExit", ".codex-linux/after-exit.d/codex-wrapper-updater-apply-pending.sh", "755"],
+        ],
+      );
+      assert.equal(
+        fs.existsSync(
+          path.join(appDir, ".codex-linux", "prelaunch.d", "codex-wrapper-updater-apply-pending.sh"),
+        ),
+        true,
+      );
+      assert.equal(
+        fs.existsSync(
+          path.join(appDir, ".codex-linux", "after-exit.d", "codex-wrapper-updater-apply-pending.sh"),
+        ),
+        true,
+      );
+      assert.equal(
+        fs.existsSync(path.join(appDir, ".codex-linux", "env.d", "codex-wrapper-updater-wrapper-updater.env")),
+        false,
+      );
+    } finally {
+      fs.rmSync(appDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("apply hook preserves marker on failure and clears it on success", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wrapper-updater-"));
   const markerDir = path.join(temp, "codex-wrapper-updater");
   const marker = path.join(markerDir, "pending");
-  const manager = path.join(temp, "codex-update-manager");
+  const manager = fakeManager(temp);
   fs.mkdirSync(markerDir, { recursive: true });
   fs.writeFileSync(marker, "pending\n");
-  fs.writeFileSync(manager, "#!/usr/bin/env bash\nexit ${CODEX_FAKE_MANAGER_STATUS:-0}\n");
-  fs.chmodSync(manager, 0o755);
 
   const env = {
     ...process.env,
@@ -69,4 +143,62 @@ test("apply hook preserves marker on failure and clears it on success", () => {
   });
   assert.equal(succeeded.status, 0, succeeded.stderr);
   assert.equal(fs.existsSync(marker), false);
+});
+
+test("apply hook resolves marker from sanitized app id when app state dir is absent", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wrapper-updater-xdg-"));
+  const markerDir = path.join(temp, "codex-cua-lab", "codex-wrapper-updater");
+  const marker = path.join(markerDir, "pending");
+  const manager = fakeManager(temp);
+  fs.mkdirSync(markerDir, { recursive: true });
+  fs.writeFileSync(marker, "pending\n");
+
+  const result = spawnSync("bash", [path.join(featureDir, "apply-pending.sh")], {
+    env: {
+      ...process.env,
+      CODEX_LINUX_APP_ID: "codex-cua-lab",
+      CODEX_LINUX_APP_STATE_DIR: "",
+      CODEX_LINUX_FEATURE_HOOK_PHASE: "prelaunch",
+      CODEX_UPDATE_MANAGER_PATH: manager,
+      XDG_STATE_HOME: temp,
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test("apply hook skip guard and lock keep marker without running manager", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wrapper-updater-guard-"));
+  const markerDir = path.join(temp, "codex-wrapper-updater");
+  const marker = path.join(markerDir, "pending");
+  const invoked = path.join(temp, "manager-invoked");
+  const manager = fakeManager(temp, `touch ${JSON.stringify(invoked)}\nexit 0\n`);
+  fs.mkdirSync(markerDir, { recursive: true });
+  fs.writeFileSync(marker, "pending\n");
+
+  const env = {
+    ...process.env,
+    CODEX_LINUX_APP_STATE_DIR: temp,
+    CODEX_LINUX_FEATURE_HOOK_PHASE: "prelaunch",
+    CODEX_UPDATE_MANAGER_PATH: manager,
+  };
+
+  const skipped = spawnSync("bash", [path.join(featureDir, "apply-pending.sh")], {
+    env: { ...env, CODEX_WRAPPER_UPDATER_SKIP_PRELAUNCH_ONCE: "1" },
+    encoding: "utf8",
+  });
+  assert.equal(skipped.status, 0, skipped.stderr);
+  assert.equal(fs.existsSync(marker), true);
+  assert.equal(fs.existsSync(invoked), false);
+
+  fs.mkdirSync(path.join(markerDir, "apply.lock"));
+  const locked = spawnSync("bash", [path.join(featureDir, "apply-pending.sh")], {
+    env,
+    encoding: "utf8",
+  });
+  assert.equal(locked.status, 0, locked.stderr);
+  assert.equal(fs.existsSync(marker), true);
+  assert.equal(fs.existsSync(invoked), false);
 });
